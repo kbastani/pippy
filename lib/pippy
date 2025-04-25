@@ -1,0 +1,953 @@
+#!/usr/bin/env bash
+# -*- coding: utf-8 -*-
+# ------------------------------------------------------------------------------
+#  pippy – lightweight “npm-install & project manager” for Python projects
+# ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# 1.  Strict shell settings
+# ------------------------------------------------------------------------------
+IFS=$'\n\t'                # safe word-splitting
+umask 022                  # sane default perms for new files
+set -o pipefail           # fail on any error in a pipeline
+set -o noclobber          # no overwriting files with >
+set -o errexit           # exit on error
+set -o nounset           # exit on unbound variable
+
+# ------------------------------------------------------------------------------
+# 2.  Script location (works whether installed via pipx, curl, or symlink)
+# ------------------------------------------------------------------------------
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+# ------------------------------------------------------------------------------
+# 3.  Constants
+# ------------------------------------------------------------------------------
+SCRIPT_NAME="pippy"
+VERSION="1.0.0"
+CONFIG_FILE="pippy.json"
+LOG_FILE="${SCRIPT_NAME}.log"
+
+# ------------------------------------------------------------------------------
+# 4.  Environment – *do not* pre-set VIRTUAL_ENV
+# ------------------------------------------------------------------------------
+#- Leave PYTHONPATH untouched unless the user already exports it.
+export PYTHONPATH="${PYTHONPATH:-}"
+
+#  NOTE:  VIRTUAL_ENV is set only after `source <dir>/.venv/bin/activate`
+#  inside ensure_venv.  Do *not* export a placeholder here or you’ll mask
+#  the real virtualenv later on.
+
+#  NOTE:  If you want to use a different Python version, set it in your
+#  shell’s config (e.g. ~/.bashrc) or use pyenv to manage Python versions.
+
+# ------------------------------------------------------------------------------
+# Helper functions
+# ------------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# usage [exit_code]
+# Display usage message and exit with specified code
+# -----------------------------------------------------------------------------
+usage() {
+  local exit_code="${1:-0}"
+  cat <<EOF
+Usage: ${SCRIPT_NAME} <command> [args]
+
+Commands:
+  init [dir]       Create & activate .venv/ (default: current dir)
+  install [dir]    Install deps & configure main
+  update [dir]     Re-generate & install deps (force)
+  run [file|dir]   Run .py file or configured main
+  start            Shortcut for "pippy run ."
+  info             Show deps & project tree
+  lock             pip freeze → requirements.lock
+  test             Run pytest or unittest
+  clean            Remove __pycache__ & *.pyc
+  shell            Spawn a shell with venv activated
+  ask [question]   Ask GPT about your Python project
+  develop          python -m pip install -e .
+  pkg              Build distributions
+  publish          Upload to PyPI via twine
+  lint             Run flake8
+  format           Run isort & black
+  audit            Run pip-audit
+  coverage         Run coverage report
+  docs init/build  Scaffold & build docs
+  bump <level>     Bump version
+  doctor           Health check
+  ci-setup         CI/CD scaffold stub
+  ml               TensorFlow device check
+
+EOF
+  exit "$exit_code"
+}
+
+# -----------------------------------------------------------------------------
+# log_message [level] [message]
+# Log messages with timestamp and level
+# -----------------------------------------------------------------------------
+log_message() {
+  local level="${1:-INFO}"
+  local message="${2:-}"
+  local timestamp=$(date +'%Y-%m-%dT%H:%M:%S')
+  echo "${timestamp} [${level}] ${message}" >&2
+}
+
+# -----------------------------------------------------------------------------
+# die [message]
+# Exit with error message and non-zero status
+# -----------------------------------------------------------------------------
+die() {
+  local message="${1:-}"
+  log_message "ERROR" "${message}"
+  usage 1
+}
+
+# -----------------------------------------------------------------------------
+# ensure_venv [dir]
+# Ensure virtual environment exists and is activated
+# -----------------------------------------------------------------------------
+ensure_venv() {
+  local base_dir="${1:-$(pwd)}"
+
+  # Check if already in virtualenv
+  if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+    log_message "INFO" "Virtual environment already active: ${VIRTUAL_ENV}"
+    return
+  fi
+
+  # Create/activate virtualenv
+  if [[ ! -d "${base_dir}" ]]; then
+    die "Directory '${base_dir}' does not exist"
+  fi
+
+  if [[ -d ".venv" ]]; then
+    read -rp "Activate existing .venv in '${base_dir}'? [Y/n] " ans
+    ans=${ans:-Y}
+    if [[ "$ans" =~ ^[Yy] ]]; then
+      if [[ -f ".venv/bin/activate" ]]; then
+        SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+        # shellcheck source=/dev/null
+        source .venv/bin/activate
+      else
+        log_message "ERROR" "Activation script missing: .venv/bin/activate"
+        return 1
+      fi
+    fi
+  else
+    read -rp "No Python virtual environment is active. Create and activate a new .venv in '${base_dir}'? [Y/n] " ans
+    ans=${ans:-Y}
+    if [[ "$ans" =~ ^[Yy] ]]; then
+      log_message "INFO" "Creating new virtual environment in '${base_dir}'..."
+      python3 -m venv .venv
+      SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+      # shellcheck source=/dev/null
+      source .venv/bin/activate
+    fi
+  fi
+
+  # Check if we are inside a virtualenv now 
+  if [[ -z "${VIRTUAL_ENV:-}" ]]; then
+    log_message "ERROR" "There was an error activating your Python virtual environment. Please activate it manually."
+    exit 1
+  fi
+
+  log_message "INFO" "Virtual environment activated. (VIRTUAL_ENV=${VIRTUAL_ENV})"
+  log_message "INFO" "Python version: $(python --version)"
+  log_message "INFO" "Pip version: $(python -m pip --version)"
+  log_message "INFO" "Python path: $(python -c 'import site; print(site.getsitepackages()[0])')"
+  log_message "INFO" "Virtualenv path: ${VIRTUAL_ENV}"
+  log_message "INFO" "Virtualenv site-packages: $(python -c 'import site; print(site.getsitepackages()[0])')"
+  log_message "INFO" "Virtualenv bin: $(python -c 'import site; print(site.getsitepackages()[0])')/bin"
+  log_message "INFO" "Virtualenv lib: $(python -c 'import site; print(site.getsitepackages()[0])')/lib"
+  log_message "INFO" "Virtualenv include: $(python -c 'import site; print(site.getsitepackages()[0])')/include"
+  log_message "INFO" "Virtualenv pyvenv.cfg: $(python -c 'import site; print(site.getsitepackages()[0])')/pyvenv.cfg"
+  log_message "INFO" "Virtualenv pyvenv.cfg (home): $(python -c 'import site; print(site.getsitepackages()[0])')/pyvenv.cfg (home)"
+  log_message "INFO" "Virtualenv pyvenv.cfg (include-system-site-packages): $(python -c 'import site; print(site.getsitepackages()[0])')/pyvenv.cfg (include-system-site-packages)"
+}
+
+# -----------------------------------------------------------------------------
+# with_help "Human label" cmd [arg …]
+# Runs the command, captures *all* output, and on non-zero exit
+# pipes the last 50 lines + context to `pippy ask`.
+# -----------------------------------------------------------------------------
+with_help() {
+  local label="$1"; shift
+  local output rc
+  output=$("$@" 2>&1) || rc=$?
+
+  if [[ -n "${rc:-}" ]]; then
+    echo "❌  $label failed (exit $rc):"
+    printf '%s\n' "$output"
+    echo "🔍  Passing context to pippy ask…"
+    printf -- "⚙️  %s failed (exit %s)\n\n%s\n" \
+            "$label" "$rc" "$(printf '%s\n' "$output" | tail -n 50)" \
+      | pippy ask     # ← piped into the refactored cmd_ask below
+    exit "$rc"
+  fi
+
+  printf '%s\n' "$output"
+}
+
+ensure_cython() {
+  if ! command -v cython &>/dev/null; then
+    log_message "INFO" "Installing Cython into your environment..."
+    python -m pip install cython
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Helper – ensure OpenAI client is present
+# -----------------------------------------------------------------------------
+ensure_openai() {
+  python - <<'PY' 2>/dev/null && return
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec("openai") else 1)
+PY
+  echo "Installing OpenAI Python client..."
+  python -m pip install --upgrade "openai>=1.2"     # pinned to modern 1.x API
+}
+
+# -----------------------------------------------------------------------------
+# ensure_pipreqs
+# Ensure pipreqs is installed in the virtual environment
+# -----------------------------------------------------------------------------
+ensure_pipreqs() {
+  if ! command -v pipreqs &>/dev/null; then
+    log_message "INFO" "Installing pipreqs into your environment..."
+    python -m pip install pipreqs
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# update_config "field" "value"
+# Update configuration file
+# -----------------------------------------------------------------------------
+update_config() {
+  local field="$1" value="$2" cfg="${3:-${CONFIG_FILE}}"
+  local main
+  if [[ -f "$cfg" ]]; then
+    main=$(jq -r '.main' "$cfg" 2>/dev/null)
+  fi
+
+  cat > "$cfg" <<EOF
+{
+  "main": ${main:+\"$main\"},
+  "$field": $value
+}
+EOF
+}
+
+# -----------------------------------------------------------------------------
+# configure_main [dir]
+# Ask which file should be treated as “main” and store it in pippy.json
+# – Skips any   .venv/   venv/   or  __pycache__/   directory trees.
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# configure_main [dir]
+# Prompt the user to pick a “main” Python file and store it in pippy.json
+# Compatible with the BSD utilities that ship on macOS (no mapfile, no GNU grep).
+# -----------------------------------------------------------------------------
+configure_main() {
+  local base_dir="${1:-$(pwd)}"
+  base_dir="$(cd -- "$base_dir" && pwd)" || return 1
+
+  local cfg="${base_dir}/${CONFIG_FILE:-pippy.json}"
+  local current_main=""
+
+  # --- read existing value ----------------------------------------------------
+  if [[ -f $cfg ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      current_main=$(jq -r '.main // empty' "$cfg" 2>/dev/null)
+    else
+      # BSD grep lacks -P (Perl regex); use sed instead
+      current_main=$(sed -nE 's/.*"main"[[:space:]]*:[[:space:]]*"([^"]+)".*/\\1/p' "$cfg" | head -n1)
+    fi
+  fi
+  [[ -n $current_main ]] && return 0     # already configured
+
+  log_message "INFO" "Configuring main application file …"
+  read -rp "Configure a main application file for '${base_dir}'? [Y/n] " ans
+  [[ ${ans:-Y} =~ ^[Yy]$ ]] || return 1
+
+  # --- discover candidates (exclude .venv, venv, __pycache__) -----------------
+  mains=()     # bash array – POSIX mapfile alternative
+  while IFS= read -r f; do
+    mains+=("$f")
+  done < <(
+    find "$base_dir" -type f -name '*.py' \
+         ! -path "$base_dir/.venv/*" \
+         ! -path "$base_dir/venv/*"  \
+         ! -path '*/__pycache__/*'   \
+         -exec grep -Il 'if[[:space:]]\+__name__[[:space:]]*==[[:space:]]*["'"'"']__main__["'"'"']' {} \; 2>/dev/null
+  )
+
+  local main=""
+  if ((${#mains[@]} == 1)); then
+    main="${mains[0]}"
+    log_message "INFO" "Found main: $main"
+  elif ((${#mains[@]} > 1)); then
+    echo "Multiple mains detected:"
+    local i=1
+    for f in "${mains[@]}"; do
+      printf "  %2d) %s\n" "$i" "${f#$base_dir/}"
+      ((i++))
+    done
+    read -rp "Select number of main file: " sel
+    main="${mains[sel-1]}"
+  else
+    read -rp "No __main__ found. Enter path to Python file (relative): " rel
+    main="${base_dir}/${rel}"
+    [[ -f $main ]] || { log_message "ERROR" "File '$main' not found"; return 1; }
+  fi
+
+  # --- compute path relative to project root (realpath --relative-to is GNU) --
+  local rel_main
+  rel_main=$(python - <<'PY' "$base_dir" "$main"
+import os, sys
+print(os.path.relpath(sys.argv[2], start=sys.argv[1]))
+PY
+  )
+
+  update_config main "\"$rel_main\""
+  log_message "INFO" "Wrote main entry to $cfg → $rel_main"
+}
+
+
+
+# -----------------------------------------------------------------------------
+# get_api_key
+# Get OpenAI API key from configuration or environment
+# -----------------------------------------------------------------------------
+get_api_key() {
+  local cfg="${CONFIG_FILE}"
+  local use_env_key=""     # boolean read from pippy.json
+  local saved_key=""       # key saved inside pippy.json
+
+  # Load values from pippy.json if the file exists
+  if [[ -f "$cfg" ]]; then
+    use_env_key=$(jq -r '.use_env_key' "$cfg" 2>/dev/null)
+    saved_key=$(jq -r '.openai_api_key' "$cfg" 2>/dev/null)
+  fi
+
+  # Honour "use_env_key": true to take OPENAI_API_KEY from env
+  if [[ "$use_env_key" == "true" ]]; then
+    [[ -n "${OPENAI_API_KEY:-}" ]] || die "OPENAI_API_KEY is not set, but \"use_env_key\" is true"
+    printf '%s\n' "$OPENAI_API_KEY"
+    return
+  fi
+
+  # Use saved key if available
+  if [[ -n "$saved_key" ]]; then
+    printf '%s\n' "$saved_key"
+    return
+  fi
+
+  # Offer to use environment key if available
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    read -p "Use existing OPENAI_API_KEY from environment? [Y/n] " ans
+    ans=${ans:-Y}
+    if [[ "$ans" =~ ^[Yy] ]]; then
+      read -p "Save \"use_env_key\": true in pippy.json? [Y/n] " save
+      save=${save:-Y}
+      if [[ "$save" =~ ^[Yy] ]]; then
+        update_config "use_env_key" "true"
+      fi
+      printf '%s\n' "$OPENAI_API_KEY"
+      return
+    fi
+  fi
+
+  # Prompt for a fresh key
+  read -p "Enter your OpenAI API Key: " ans_key
+  [[ -n "$ans_key" ]] || die "No OpenAI API key provided"
+  OPENAI_API_KEY="$ans_key"
+  # Remove new lines and empty spaces from the API key
+  export OPENAI_API_KEY="${OPENAI_API_KEY//[$'\n\r\t ']/}"
+  log_message "INFO" "API key provided"
+
+  # Offer to save the key in pippy.json
+  read -p "Save this key in pippy.json? [Y/n] " save
+  save=${save:-Y}
+  if [[ "$save" =~ ^[Yy] ]]; then
+    update_config "openai_api_key" "\"$OPENAI_API_KEY\""
+  fi
+
+  printf '%s\n' "$OPENAI_API_KEY"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_init [dir]      – create (if needed) & activate <dir>/.venv
+# -----------------------------------------------------------------------------
+cmd_init() {
+  local dir="${1:-.}"
+  local fullpath
+
+  # Resolve absolute path or bail
+  if ! fullpath="$(cd -- "$dir" && pwd)"; then
+    log_message "ERROR" "Directory '$dir' not found"; return 1
+  fi
+
+  log_message "INFO" "Initializing virtual environment in ${fullpath} …"
+
+  # ---------------------------------------------------------------------------
+  # 1. Create the venv only if it doesn't already exist
+  # ---------------------------------------------------------------------------
+  if [[ -d "${fullpath}/.venv" ]]; then
+    log_message "INFO" "Found existing virtualenv at ${fullpath}/.venv"
+  else
+    log_message "INFO" "Creating new virtualenv …"
+    if ! python3 -m venv "${fullpath}/.venv"; then
+      log_message "ERROR" "python -m venv failed"; return 1
+    fi
+    log_message "INFO" "Virtualenv created successfully"
+  fi
+
+  # ---------------------------------------------------------------------------
+  # 2. Activate the venv we just created/found
+  # ---------------------------------------------------------------------------
+  local activate="${fullpath}/.venv/bin/activate"
+  if [[ ! -f "$activate" ]]; then
+    log_message "ERROR" "Activation script missing: $activate"; return 1
+  fi
+
+  log_message "INFO" "Activating virtual environment …"
+
+  SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  
+  # shellcheck source=/dev/null
+  source "$activate"
+
+  export PATH="$VIRTUAL_ENV/bin:$PATH"
+
+  log_message "INFO" "Virtual environment activated ($(python -V))"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_install [dir]
+# Regenerate requirements.txt via pipreqs, install them, then configure “main”
+# -----------------------------------------------------------------------------
+cmd_install() {
+  local dir="${1:-.}"
+  dir="$(cd -- "$dir" && pwd)" || { log_message "ERROR" "Directory '$1' not found"; return 1; }
+
+  ensure_venv  "$dir"
+  ensure_pipreqs
+
+  # ---------------------------------------------------------------------------
+  # 1. Re-create <dir>/requirements.txt with pipreqs --force
+  # ---------------------------------------------------------------------------
+  local req_file="$dir/requirements.txt"
+  log_message "INFO" "Generating ${req_file} …"
+  if ! pipreqs "$dir" --force --ignore .venv,venv --savepath "$req_file" >/dev/null 2>&1; then
+    log_message "ERROR" "pipreqs failed"
+    return 1
+  fi
+  log_message "INFO" "requirements.txt contains $(wc -l <"$req_file") packages"
+
+  # ---------------------------------------------------------------------------
+  # 2. Install / upgrade everything inside the venv
+  # ---------------------------------------------------------------------------
+  with_help "Installing project dependencies" \
+            python -m pip install --upgrade -r "$req_file"
+
+  # ---------------------------------------------------------------------------
+  # 3. Ask the user to pick a main file (only if not already set)
+  # ---------------------------------------------------------------------------
+  configure_main "$dir"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_update [dir]
+# Regenerate requirements with pipreqs (--force) and upgrade/install them
+# -----------------------------------------------------------------------------
+cmd_update() {
+  local dir="${1:-.}"
+  dir="$(cd -- "$dir" && pwd)" || { log_message "ERROR" "Directory '$1' not found"; return 1; }
+
+  ensure_venv  "$dir"
+  ensure_pipreqs
+
+  # ---------------------------------------------------------------------------
+  # 1. Re-create <dir>/requirements.txt with pipreqs --force
+  # ---------------------------------------------------------------------------
+  local req_file="$dir/requirements.txt"
+  log_message "INFO" "Generating ${req_file} …"
+  if ! pipreqs "$dir" --force --ignore .venv,venv --savepath "$req_file" >/dev/null 2>&1; then
+    log_message "ERROR" "pipreqs failed"
+    return 1
+  fi
+  log_message "INFO" "requirements.txt contains $(wc -l <"$req_file") packages"
+
+  # ---------------------------------------------------------------------------
+  # 2. Install / upgrade everything inside the venv
+  # ---------------------------------------------------------------------------
+  
+  python -m pip install --upgrade -r "$req_file"
+
+  # Upgrade pip itself
+  python -m pip install --upgrade pip
+  python -m pip install --upgrade setuptools wheel
+  
+  log_message "INFO" "Dependencies updated successfully"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_start
+# Shortcut for running configured main
+# -----------------------------------------------------------------------------
+cmd_start() {
+  cmd_run "."
+}
+
+# -----------------------------------------------------------------------------
+# cmd_run  [file|dir]
+# Run a given .py file, or if a directory is supplied run its configured “main”.
+# -----------------------------------------------------------------------------
+cmd_run() {
+  local target="${1:-.}"
+  target="$(cd -- "$target" && pwd)" || { die "Path '$1' not found"; }
+
+  # ---------------------------------------------------------------------------
+  # 1. If the argument is an explicit Python file, just run it
+  # ---------------------------------------------------------------------------
+  if [[ -f $target && ${target##*.} == py ]]; then
+    ensure_venv "$(dirname -- "$target")"
+    log_message "INFO" "Running file: $target"
+    python "$target"
+    return
+  fi
+
+  # ---------------------------------------------------------------------------
+  # 2. Otherwise we expect a project directory with pippy.json
+  # ---------------------------------------------------------------------------
+  if [[ -d $target ]]; then
+    local cfg="$target/${CONFIG_FILE:-pippy.json}"
+    [[ -f $cfg ]] || configure_main "$target"
+
+    # try jq first, grep fallback if jq missing
+    local main=""
+    main=$(grep -Po '"main"\\s*:\\s*"\\K[^"]+' "$cfg" || true)
+    [[ -n $main ]] || die "Main not configured in $cfg"
+
+    ensure_venv "$target"
+    log_message "INFO" "Running $main inside '$target'"
+    # shellcheck disable=SC2086 # $main is intentionally unquoted to allow spaces in paths
+    python "$target/$main"
+    return
+  fi
+
+  die "Target '$1' is neither a Python file nor a directory"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_lock  [file]
+# Write current environment to requirements.lock (or the file you pass)
+# -----------------------------------------------------------------------------
+cmd_lock() {
+  ensure_venv
+  local out="${1:-requirements.lock}"
+  log_message "INFO" "Freezing environment → ${out} …"
+  if ! python -m pip freeze >"$out"; then
+    log_message "ERROR" "pip freeze failed"
+    return 1
+  fi
+  log_message "INFO" "Wrote $(wc -l <"$out") package pins to ${out}"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_test
+# Run pytest if available, otherwise fall back to unittest
+# -----------------------------------------------------------------------------
+cmd_test() {
+  ensure_venv
+  log_message "INFO" "Running test suite …"
+  if command -v pytest >/dev/null 2>&1; then
+    with_help "pytest" pytest
+  else
+    with_help "unittest" python -m unittest discover
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# cmd_clean
+# Remove __pycache__ dirs and *.py[co] — but skip any virtual-env directories
+# -----------------------------------------------------------------------------
+cmd_clean() {
+  log_message "INFO" "Cleaning caches & compiled files …"
+  # delete __pycache__ directories outside .venv/ or venv/
+  find . '\( -path './.venv' -o -path './venv' \)' -prune -o \
+        -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null
+  # delete *.pyc / *.pyo likewise
+  find . '\( -path './.venv' -o -path './venv' \)' -prune -o \
+        -type f -name '*.py[co]' -delete 2>/dev/null
+  log_message "INFO" "Cleaning complete"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_shell
+# Start an interactive subshell with the project virtual-env activated
+# -----------------------------------------------------------------------------
+cmd_shell() {
+  ensure_venv
+  log_message "INFO" "Spawning sub-shell (VIRTUAL_ENV=${VIRTUAL_ENV})"
+  exec "${SHELL:-/bin/bash}" -l
+}
+
+
+# -----------------------------------------------------------------------------
+# cmd_ask [question]
+# Ask GPT about the current project (reads from stdin when piped)
+# -----------------------------------------------------------------------------
+cmd_ask() {
+  ensure_venv
+  ensure_openai                       # auto-install openai client if missing
+  local api_key
+  api_key=$(get_api_key) || return 1  # exits with message if key absent
+
+  # Strip stray whitespace from the key just in case
+  OPENAI_API_KEY="${api_key//$'\n'/}"
+  OPENAI_API_KEY="${OPENAI_API_KEY//$'\r'/}"
+  OPENAI_API_KEY="${OPENAI_API_KEY//$'\t'/}"
+  export OPENAI_API_KEY               # so Python picks it up automatically
+
+  # ---------------------------------------------------------------------------
+  # 1. Collect the question (CLI args → string, else read from stdin)
+  # ---------------------------------------------------------------------------
+  local question
+  if [[ ! -t 0 ]]; then
+    question="$(cat)"
+  else
+    shift || true
+    question="$*"
+    [[ -z $question ]] && read -rp "Question for GPT: " question
+  fi
+
+  # ---------------------------------------------------------------------------
+  # 2. Snapshot project files, capped at 200 KB to avoid huge payloads
+  # ---------------------------------------------------------------------------
+  local code=""
+  local size=0
+  while IFS= read -r file; do
+    local snippet=$'### File: '"$file"$'\n'"$(<"$file")"$'\n\n'
+    size=$((size + ${#snippet}))
+    if (( size > 204800 )); then
+      code+=$'\n… (truncated)\n'
+      break
+    fi
+    code+="$snippet"
+  done <$(find . -type f -name '*.py' \
+         ! -path './.venv/*' \
+         ! -path './venv/*' \
+         ! -path '*/__pycache__/*' \
+         ! -name "$CONFIG_FILE" \
+         ! -name '*.lock' \
+         ! -name '*.json' \
+         ! -name '*.txt' \
+         ! -name '*.md' \
+         ! -name '*.rst') 2>/dev/null
+
+  # ---------------------------------------------------------------------------
+  # 3. Call the OpenAI client (key taken from env, no args-length issues)
+  # ---------------------------------------------------------------------------
+  python - <<'PY' "$question" "$code"
+import sys, os, openai, textwrap
+
+question, code = sys.argv[1], sys.argv[2]
+client = openai.OpenAI()                      # uses OPENAI_API_KEY env var
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system",
+         "content": "You are a helpful Python project assistant."},
+        {"role": "assistant",
+         "content": f"Here is the project code excerpt:\\n\\n{code}\\n\\nQuestion: {question}"}
+    ],
+)
+print("\n" + response.choices[0].message.content.strip() + "\n")
+PY
+}
+
+# -----------------------------------------------------------------------------
+# cmd_develop
+# Install project in editable mode
+# -----------------------------------------------------------------------------
+cmd_develop() {
+  ensure_venv
+  log_message "INFO" "Installing in editable mode..."
+  python -m pip install -e .
+}
+
+# -----------------------------------------------------------------------------
+# cmd_pkg
+# Build source and wheel distributions
+# -----------------------------------------------------------------------------
+cmd_pkg() {
+  ensure_venv
+  log_message "INFO" "Building distributions..."
+  if command -v python -m build &>/dev/null; then
+    python -m build
+  else
+    python setup.py sdist bdist_wheel
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# cmd_publish
+# Upload distributions to PyPI
+# -----------------------------------------------------------------------------
+cmd_publish() {
+  ensure_venv
+  if ! command -v twine &>/dev/null; then
+    python -m pip install twine
+  fi
+  log_message "INFO" "Uploading distributions via twine..."
+  twine upload dist/*
+}
+
+# -----------------------------------------------------------------------------
+# cmd_lint
+# Run flake8 linting
+# -----------------------------------------------------------------------------
+cmd_lint() {
+  ensure_venv
+  if ! command -v flake8 &>/dev/null; then
+    python -m pip install flake8
+  fi
+  log_message "INFO" "Running flake8..."
+  flake8 .
+}
+
+# -----------------------------------------------------------------------------
+# cmd_format
+# Run isort and black formatting
+# -----------------------------------------------------------------------------
+cmd_format() {
+  ensure_venv
+  for pkg in isort black; do
+    if ! command -v "$pkg" &>/dev/null; then
+      python -m pip install "$pkg"
+    fi
+  done
+  log_message "INFO" "Running isort and black..."
+  isort . && black .
+}
+
+# -----------------------------------------------------------------------------
+# cmd_audit
+# Run pip-audit for vulnerability checks
+# -----------------------------------------------------------------------------
+cmd_audit() {
+  ensure_venv
+  if ! command -v pip-audit &>/dev/null; then
+    python -m pip install pip-audit
+  fi
+  log_message "INFO" "Running pip-audit..."
+  pip-audit
+}
+
+# -----------------------------------------------------------------------------
+# cmd_coverage
+# Run coverage analysis
+# -----------------------------------------------------------------------------
+cmd_coverage() {
+  ensure_venv
+  if ! command -v coverage &>/dev/null; then
+    python -m pip install coverage
+  fi
+  log_message "INFO" "Running coverage analysis..."
+  coverage run -m pytest
+  coverage report
+}
+
+# -----------------------------------------------------------------------------
+# cmd_docs [subcmd]
+# Manage project documentation
+# -----------------------------------------------------------------------------
+cmd_docs() {
+  local subcmd="$1"
+  ensure_venv
+  case "$subcmd" in
+    init)
+      if ! command -v sphinx-quickstart &>/dev/null; then
+        python -m pip install sphinx
+      fi
+      log_message "INFO" "Scaffolding Sphinx docs in docs/"
+      sphinx-quickstart docs
+      ;;
+    build)
+      log_message "INFO" "Building HTML docs..."
+      sphinx-build -b html docs docs/_build/html
+      ;;
+    *)
+      die "Usage: pippy docs <init|build>"
+      ;;
+  esac
+}
+
+# -----------------------------------------------------------------------------
+# cmd_bump <level>
+# Bump version in setup.py or pyproject.toml
+# -----------------------------------------------------------------------------
+cmd_bump() {
+  local level="$1"
+  ensure_venv
+  case "$level" in
+    patch|minor|major)
+      log_message "INFO" "Bumping version (${level})..."
+      # TODO: Implement version bump logic
+      ;;
+    *)
+      die "Usage: pippy bump <patch|minor|major>"
+      ;;
+  esac
+}
+
+# -----------------------------------------------------------------------------
+# cmd_doctor
+# Run health checks
+# -----------------------------------------------------------------------------
+cmd_doctor() {
+  ensure_venv
+  
+  log_message "INFO" "Running environment health checks..."
+  log_message "INFO" "Python version: $(python --version)"
+  log_message "INFO" "Virtualenv: ${VIRTUAL_ENV:-None}"
+  if command -v pip &>/dev/null; then
+    log_message "INFO" "Pip version: $(pip --version)"
+  fi
+  if command -v git &>/dev/null; then
+    log_message "INFO" "Git repo: $(git rev-parse --is-inside-work-tree 2>/dev/null)"
+  fi
+  log_message "INFO" "Health check complete"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_ci_setup
+# Scaffold CI/CD configuration
+# -----------------------------------------------------------------------------
+cmd_ci_setup() {
+  log_message "INFO" "CI/CD scaffolding stub..."
+  # TODO: Implement CI/CD setup
+}
+
+# -----------------------------------------------------------------------------
+# cmd_info
+# Show detected requirements (via pipreqs) and an ASCII tree of project *.py
+# Excludes all virtual-env folders (.venv/, venv/) and __pycache__.
+# -----------------------------------------------------------------------------
+cmd_info() {
+  ensure_venv              # guarantees correct interpreter for pipreqs
+  ensure_pipreqs
+
+  # ---------------------------------------------------------------------------
+  # 1. Requirements as pipreqs sees them
+  # ---------------------------------------------------------------------------
+  echo
+  echo "=== Requirements (pipreqs) ==="
+  pipreqs . --print --force | sort
+
+  # ---------------------------------------------------------------------------
+  # 2. Python file tree (skip venvs + caches)
+  # ---------------------------------------------------------------------------
+  echo
+  echo "=== Python file tree (excluding .venv/ venv/ __pycache__) ==="
+
+  if command -v tree >/dev/null 2>&1; then
+    # tree: -I = ignore pattern   -P = include pattern
+    tree -I '.venv|venv|__pycache__' -P '*.py' -a
+  else
+    # Portable fallback when tree isn’t installed
+    find . -type f -name '*.py' \
+         ! -path './.venv/*' \
+         ! -path './venv/*' \
+         ! -path '*/__pycache__/*' \
+      | sed 's|^\./||' \
+      | awk -F/ '{
+           indent="";
+           for(i=1;i<NF;i++) indent=indent "│   ";
+           print indent "└── " $NF
+         }'
+  fi
+
+  echo
+}
+
+
+# -----------------------------------------------------------------------------
+# cmd_ml
+# Check TensorFlow GPU/CPU availability
+# -----------------------------------------------------------------------------
+cmd_ml() {
+  ensure_venv
+
+  # 1. Install TensorFlow (if not already installed)
+  install_tf || {
+    echo "Error: TensorFlow installation failed. Please check your Python version."
+    return 1
+  }
+ 
+  # 2. Run TF device probe (auto-explain on failure)
+  with_help "TensorFlow device check" \
+            python - <<'PY'
+import tensorflow as tf
+print("Built with CUDA:", tf.test.is_built_with_cuda())
+print("GPU devices:", tf.config.list_physical_devices('GPU'))
+print("CPU devices:", tf.config.list_physical_devices('CPU'))
+PY
+}
+
+install_tf() {
+  local pyver
+  pyver=$({1:-$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')})
+  if [[ "$pyver" == "3.12" ]]; then
+    echo "Python 3.12 is not yet supported by TensorFlow."
+    return 1
+  fi
+
+  with_help "Installing TensorFlow" \
+    python -m pip install "tensorflow>=2.16" numpy scipy pandas scikit-learn \
+  || {
+       echo
+       echo "🚫  Pre-built TensorFlow wheels are not yet available for Python $pyver."
+       echo "💡  Work-arounds:"
+       echo "    • Use Python 3.12 (pyenv install 3.12 && pyenv local 3.12)"
+       echo "    • Try the nightly CPU build:  python -m pip install tf-nightly-cpu"
+       echo "    • Skip the ML check: pippy ml --skip-install"
+       echo
+       return 1
+     }
+}
+
+# ------------------------------------------------------------------------------
+# Main dispatcher
+# ------------------------------------------------------------------------------
+case "${1:-}" in
+  init)      shift; cmd_init "$@";;
+  install)   shift; cmd_install "$@";;
+  update)    shift; cmd_update "$@";;
+  run)       shift; cmd_run "$@";;
+  start)     cmd_start;;
+  info)      cmd_info;;
+  lock)      cmd_lock;;
+  test)      cmd_test;;
+  clean)     cmd_clean;;
+  shell)     cmd_shell;;
+  ask)       shift; cmd_ask "$@";;
+  develop)   cmd_develop;;
+  pkg)       cmd_pkg;;
+  publish)   cmd_publish;;
+  lint)      cmd_lint;;
+  format)    cmd_format;;
+  audit)     cmd_audit;;
+  coverage)  cmd_coverage;;
+  docs)      shift; cmd_docs "$@";;
+  bump)      shift; cmd_bump "$@";;
+  doctor)    cmd_doctor;;
+  ci-setup)  cmd_ci_setup;;
+  ml)        cmd_ml;;
+  *)
+    usage 1
+    ;;
+esac

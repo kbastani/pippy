@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pippy"
+dynamic = ["version"]
+description = 'Pippy makes it easier to develop Python applications'
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+keywords = []
+authors = [
+  { name = "kbastani", email = "kbastani@realogicworks.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+  "click",
+]
+
+[project.urls]
+Documentation = "https://github.com/kbastani/pippy#readme"
+Issues = "https://github.com/kbastani/pippy/issues"
+Source = "https://github.com/kbastani/pippy"
+
+[project.scripts]
+pippy = "pippy.cli:pippy"
+
+[tool.hatch.version]
+path = "src/pippy/__about__.py"
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+  "mypy>=1.0.0",
+]
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:src/pippy tests}"
+
+[tool.coverage.run]
+source_pkgs = ["pippy", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/pippy/__about__.py",
+]
+
+[tool.coverage.paths]
+pippy = ["src/pippy", "*/pippy/src/pippy"]
+tests = ["tests", "*/pippy/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
