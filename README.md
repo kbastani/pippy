@@ -1,137 +1,163 @@
 # pippy
 
-*I don't feel like advertising anything today, come back later.*
+🚧 *A work-in-progress Python project helper. Use at your own risk (for now!).* 🚧
 
 ---
 
-## You probably want to find some other tool
+## What is this? (And why you might look elsewhere... for now)
 
-Pippy does simple things for Python that other package managers and build tools do for other large programming languages and frameworks. As a member of the Spring team and a long-time developer of open source projects and reference architectures focused on developer experience, I wanted to create something that was useful for my own Python projects that let's me stay in my IDE without having to look up some obscure Python error or to struggle with getting an ML environment setup. I've got plans for this, but it will be a work in progress. Here are some things that ChatGPT wrote for you to get started.
+Pippy aims to bring simple, helpful project management workflows to Python, inspired by tools common in other ecosystems (like npm, mvn, gradle). As someone involved in developer experience (Spring team, open-source projects), I wanted a tool for my own Python work that reduces friction, especially around environment setup (looking at you, ML on different hardware!) and deciphering opaque Python errors.
 
-### The AI wrote this, but also was essential in putting this little project together
+This is **very much a work in progress** and built primarily for my own needs. It has rough edges! However, the core ideas are:
 
-- **One‑liner setup** – `curl | bash` or `pipx install git+https://github.com/you/pippy`.
-- **Virtual‑env first** – `pippy init` always creates/activates `./.venv`.
-- **Zero‑boilerplate deps** – `pippy install` auto‑generates *requirements.txt* with
-  `pipreqs` and installs everything in one go.
-- **Ask GPT without leaving the terminal** – `pippy ask "Python makes me want to pull my hair out but its me and not you, tell me how to get better at this..."` sends the last 50 lines of error + project context to OpenAI and prints an answer.
-- **Handy day‑to‑day verbs** – `run`, `test`, `lock`, `format`, `lint`, `audit`,
-  `ml` (TensorFlow sanity check) … all behind one command, which is useful for newbies coming to Python from other programming languages and framework technologies to get ML up and running on non-NVIDIA hardware and trying to use conda on the GPU with the best of intentions. You'll get the facts very quickly when stuff doesn't work for strange reasons with vague error messages.
+*   **Virtual Env First:** Commands generally expect and work within a local `.venv` directory, created easily with `pippy init`.
+*   **Simplified Dependencies:** `pippy install` can use `pipreqs` (if installed) to auto-generate a `requirements.txt` and install dependencies, getting you started quickly.
+*   **Integrated AI Help:** Tired of searching for cryptic Python errors? `pippy ask "Why does this import fail?"` sends project context (code files, recent errors if wrapped) to OpenAI for an explanation right in your terminal.
+*   **Common Workflow Commands:** A single `pippy` command provides verbs like `run`, `test`, `lock`, `format`, `lint`, `audit`, and even an `ml` command for TensorFlow sanity checks. This aims to provide a more consistent interface, especially helpful if you're coming to Python from other languages.
 
-pippy works on **Linux** and **macOS** (ships with only POSIX/BSD tools) and doesn’t require you to learn yet another package manager. Also, pippy isn't a package manager. It's a developer productivity tool for Python.
+Pippy is being developed primarily on **Linux** and **macOS**. While the core Python code *should* work on **Windows**, some commands invoking shell tools might need adjustments. It's **not** a package manager like pip or conda; it's a workflow assistant that *uses* those tools.
 
-## I built this for myself
+### Why I Built This (The AI Helper)
 
-I know there are a lot of great CLI tools out there for Python, but I wanted something a little bit more extensible and flexible that follows the same patterns as both the Java (mvn/gradle) and Node (npm) patterns. Also, I really don't like how vague Python error outputs are, so I wanted to build in an AI helper that will jump in and explain Python errors that would otherwise require me to go to the browser and look something up. Now, when an error occurs, GPT will jump in and explain things in a few sentences that gets me back to staying productive.
+Frankly, I find Python's error messages can be unhelpful sometimes. The built-in AI helper (`pippy ask`) is a key feature born from this frustration. When a command fails (or you just ask directly), it can provide context-aware explanations from GPT, hopefully saving you a trip to the browser and keeping you focused.
 
-### Don't use this tool
+### Seriously, Consider Other Tools First
 
-You should use better CLI tools for Python and go with production-grade open source projects that are popular and do similar things. As I keep developing Python applications and libraries, I'm going to improve this tool and make it better and better. Then you should use it.
+There are mature, robust, and widely-used tools in the Python ecosystem (like Poetry, PDM, Hatch, or just plain pip/venv). You should probably investigate those first!
 
-So, if you've stumbled on this repository by some miracle or another, and you're interested in creating light-weight AI agent experiences with memory, project context, and task-based capabilities then drop me a note and let's work together on something.
+As I continue using Python, I'll keep improving Pippy based on my experiences. If you stumble upon this and are interested in building developer tools, especially those integrating AI assistance (like providing context, memory, task execution), feel free to reach out.
 
 ---
 
-## Quick start (not all of it is working yet)
+## Quick Start (Python CLI Version)
 
 ```bash
-# I recommend installing using pipx
+# Recommended installation using pipx (isolates the tool)
 pipx install git+https://github.com/kbastani/pippy
 ```
 
 Initialize & install dependencies:
 
 ```bash
-cd my-project
-source pippy init   # initialize a venv in the current directory and use it
-pippy install       # installs every dependency for every python file
-pippy info          # tells you about your deps and your project structure
+# Navigate to your project directory
+cd my-python-project
+
+# Create and set up the virtual environment (.venv)
+pippy init
+
+# Generate requirements.txt (optional, needs pipreqs) and install deps
+# Or installs from existing requirements.txt
+pippy install
+
+# See detected dependencies and project structure
+pippy info
 ```
 
 Run code & tests:
 
 ```bash
-pippy run .         # runs the configured main or asks you to pick one (wip)
-pippy test          # pytest if available, else unittest (works well)
+# Run the configured main script (from pippy.json) or a specific file
+pippy run .
+pippy run my_script.py
+
+# Run tests (uses pytest if found, falls back to unittest)
+pippy test
 ```
 
 Get AI help:
 
 ```bash
-pippy ask "I can't install tensorflow using pip install tensorflow"
+# Ask about a specific problem
+pippy ask "How do I install tensorflow with GPU support on Ubuntu?"
+
+# If a pippy command fails (e.g., during install), it might suggest using 'ask'
+# (Future enhancement: automatically pipe error context to 'ask')
 ```
 
-> ✨  First time you call `ask` you’ll be prompted for an OpenAI API key if it is not available already as an environment variable. (Will improve this over time)
->
-> |   |
-> | - |
+> ✨ **OpenAI API Key:** The first time you use `pippy ask`, it will check for the `OPENAI_API_KEY` environment variable. If not found, it will prompt you to enter one. You'll have the option to store the key or a flag (`use_env_key`) in a local `pippy.json` config file for future use.
 
 ---
 
-## Command summary
+## Command Summary
 
-| Command           | Description                                             |   |
-| ----------------- | ------------------------------------------------------- | - |
-| `init [dir]`      | Create & activate `.venv/` (default: cwd)               |   |
-| `install [dir]`   | Generate + install requirements, configure **main**     |   |
-| `update [dir]`    | Regenerate requirements & upgrade packages              |   |
-| `run [file]`      | Run a `.py` file or choose from a list of runnable ones |   |
-| `start`           | Alias for `pippy run .`                                 |   |
-| `info`            | Show requirements + ASCII tree (excludes venv)          |   |
-| `lock`            | `pip freeze` → *requirements.lock*                      |   |
-| `test`            | Run `pytest` (or `unittest` fallback)                   |   |
-| `clean`           | Remove `__pycache__` / `*.py[co]`                       |   |
-| `shell`           | Spawn a subshell with venv activated                    |   |
-| `ask [question]`  | Ask GPT with project context                            |   |
-| `develop`         | `python -m pip install -e .`                            |   |
-| `pkg`             | Build sdist + wheel (`python -m build`)                 |   |
-| `publish`         | Upload *dist/* via `twine`                              |   |
-| `lint` / `format` | `flake8` / `isort` + `black`                            |   |
-| `audit`           | Security scan with `pip-audit`                          |   |
-| `coverage`        | Run coverage report                                     |   |
-| `docs init/build` | Sphinx scaffold & HTML build                            |   |
-| `bump <level>`    | Bump version (patch/minor/major) – *TODO*               |   |
-| `doctor`          | Quick environment health check                          |   |
-| `ci-setup`        | CI scaffold stub                                        |   |
-| `ml`              | TensorFlow install + device check                       |   |
+| Command             | Description                                                  | Status          |
+| :------------------ | :----------------------------------------------------------- | :-------------- |
+| `init [dir]`        | Creates/ensures `.venv/` in the target directory (default: cwd) | ✅ Implemented  |
+| `install [dir]`     | Installs deps (`requirements.txt`), optionally generates it via `pipreqs`, configures `main` script in `pippy.json` | ✅ Implemented  |
+| `update [dir]`      | Regenerates `requirements.txt` (via `pipreqs` if forced/needed) & upgrades packages | ✅ Implemented  |
+| `run [file\|dir]`   | Runs a specified `.py` file or the configured `main` script  | ✅ Implemented  |
+| `start`             | Alias for `pippy run .`                                      | ✅ Implemented  |
+| `info`              | Shows detected requirements (via `pipreqs`) + Python file tree | ✅ Implemented  |
+| `lock`              | Freezes dependencies (`pip freeze`) → `requirements.lock`    | ✅ Implemented  |
+| `test`              | Runs `pytest` (or `unittest` fallback)                       | ✅ Implemented  |
+| `clean`             | Removes `__pycache__` directories & `*.pyc`/`*.pyo` files    | ✅ Implemented  |
+| `shell`             | Spawns a new subshell with the project's venv activated (experimental) | ✅ Implemented  |
+| `ask [question]`    | Asks GPT about the project using code context                | ✅ Implemented  |
+| `develop`           | Installs project in editable mode (`pip install -e .`)       | ✅ Implemented  |
+| `pkg`               | Builds sdist + wheel (`python -m build`)                     | ✅ Implemented  |
+| `publish`           | Uploads `dist/*` contents via `twine`                        | ✅ Implemented  |
+| `lint`              | Runs `flake8` (installs if needed)                           | ✅ Implemented  |
+| `format`            | Runs `isort` & `black` (installs if needed)                  | ✅ Implemented  |
+| `audit`             | Runs security scan with `pip-audit` (installs if needed)     | ✅ Implemented  |
+| `coverage`          | Runs tests with `coverage` and shows report (installs if needed) | ✅ Implemented  |
+| `docs init`         | Scaffolds Sphinx docs in `docs/` (installs Sphinx if needed) | ✅ Implemented  |
+| `docs build`        | Builds Sphinx HTML docs (`docs/_build/html`)                 | ✅ Implemented  |
+| `bump <level>`      | Bumps version (patch/minor/major) in `pyproject.toml`      | 🚧 Planned      |
+| `doctor`            | Runs quick environment health checks                         | ✅ Implemented  |
+| `ci-setup`          | Generates basic CI config file stub (e.g., GitHub Actions)   | 🚧 Planned      |
+| `ml`                | Installs TensorFlow (optional) & checks device availability  | ✅ Implemented  |
 
 ---
 
-## Installation internals
+## Installation Internals (Python Version)
 
-- `install_pippy.sh` copies the single **`pippy`** script into
-  `/usr/local/bin` (or `$DESTDIR`) and sets the executable bit.
-- No other files are required at runtime—Pippy is literally one Bash file.
-- If run via `pipx`, the setup script drops a tiny Python shim that simply
-  executes the bundled Bash file.
+*   When you run `pipx install git+https://github.com/kbastani/pippy`, `pipx` does the following:
+    1.  Clones the repository.
+    2.  Creates an isolated virtual environment specifically for Pippy.
+    3.  Builds and installs the Pippy Python package (defined in `pyproject.toml`) and its dependencies (like `typer`, `openai`) into that isolated environment.
+    4.  Creates a symbolic link (or shim) to the `pippy` entry point script (defined in `pyproject.toml`'s `[project.scripts]`) somewhere on your system's PATH.
+*   Pippy then runs as a standard Python application within its own managed environment, invoking tools like `python`, `pip`, `pytest` etc. either from your project's `.venv` (if found) or potentially from the system PATH.
 
 ---
 
 ## Developing Pippy
 
 ```bash
-# clone & hack
+# Clone the repository
 git clone https://github.com/kbastani/pippy
 cd pippy
-./pippy test        # run self‐tests (bats/shunit2)
-./pippy lint        # shellcheck, shfmt, flake8
+
+# Create a virtual environment for development
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .\.venv\Scripts\activate
+
+# Install pippy in editable mode with development dependencies
+# (Assuming dev deps are listed under [project.optional-dependencies] "dev" in pyproject.toml)
+pip install -e ".[dev]"
+
+# Run tests (assuming pytest is used)
+pytest
+
+# Run linters/formatters (if configured, e.g., via pre-commit)
+# pre-commit run --all-files
 ```
 
-Pre‑commit hooks are configured; run `pre-commit install` after your first
-clone.
+*   Pre‑commit hooks might be configured; run `pre-commit install` after cloning if you want to use them automatically before committing.
 
 ---
 
 ## Roadmap
 
-- Windows (Git‑bash / WSL) support
-- Built‑in template for `pyproject.toml` scaffolding
-- Homebrew formula + Chocolatey package
+*   Full Windows support testing & refinement.
+*   Built‑in template generation for `pyproject.toml`.
+*   More robust `bump` command implementation.
+*   Enhanced CI/CD setup command (`ci-setup`).
+*   Potential packaging for Homebrew / Scoop / etc. *after* stabilization.
 
-Don't create any PRs unless you want me to send you a 3D printed GitHub gold star. Check `CONTRIBUTING.md` for style & test guidelines (which was generated by AI so I didn't even read it).
+Contributions are welcome, especially for the roadmap items! Please check `CONTRIBUTING.md` (if it exists and is up-to-date) for any style or testing guidelines. A simple PR with a clear description is often the best way to start.
 
 ---
 
 ## License
 
-Whatever...
+[MIT License](LICENSE)
