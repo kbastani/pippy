@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pippy"
-version = "1.0.0" # Match bash script version
+version = "1.0.2" # Match bash script version
 description = "Lightweight 'npm-install & project manager' for Python projects"
 readme = "README.md"
 requires-python = ">=3.8"

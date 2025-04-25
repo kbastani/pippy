@@ -1,3 +1,4 @@
+import re
 import typer
 from pathlib import Path
 from typing import Optional, List
@@ -44,6 +45,7 @@ def _ensure_venv(project_dir: Path, create_if_missing: bool = True) -> Optional[
         raise typer.Exit(1)
 
 
+
 @app.command("init")
 def init_project(
     dir: Optional[Path] = typer.Argument(None, help="Project directory (default: current directory).", exists=False, file_okay=False, dir_okay=True, resolve_path=True)
@@ -53,10 +55,12 @@ def init_project(
     log.info(f"Initializing project in: {project_dir}")
 
     venv_path = _ensure_venv(project_dir, create_if_missing=True)
+    helpers.ensure_tool_installed("pipreqs", "pipreqs", venv_path, project_dir)
+    # Check if pipreqs is installed in the venv
     if not venv_path: return # Error handled in _ensure_venv
 
     # Optionally, install base packages or perform other setup here
-    helpers.run_pip_cmd(["install", "--upgrade", "pip", "setuptools", "wheel"], venv_path, project_dir)
+    # helpers.run_pip_cmd(["install", "--upgrade", "pip", "setuptools", "wheel"], venv_path, project_dir)
 
     log.info(f"Virtual environment ready at: {venv_path}")
     if platform.system() == "Windows":
@@ -66,10 +70,19 @@ def init_project(
     log.info(f"To activate it manually, run: {activate_cmd}")
 
 
+# pippy/commands/core.py
+
+# ... (other imports) ...
+from .. import helpers
+from ..config import log, VENV_DIR_NAME, REQ_FILE_NAME, CONFIG_FILE_NAME, EXCLUDE_DIRS # Import EXCLUDE_DIRS
+
+
+# ... (other commands like init) ...
+
 @app.command("install")
 def install_deps(
     dir: Optional[Path] = typer.Argument(None, help="Project directory (default: current directory).", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
-    force_req_gen: bool = typer.Option(False, "--force-req", "-f", help="Force regeneration of requirements.txt using pipreqs."),
+    force_req_gen: bool = typer.Option(False, "--force-req", "-f", help=f"Force regeneration of {REQ_FILE_NAME} using pipreqs."),
     skip_main_config: bool = typer.Option(False, "--skip-main", help="Skip configuring the main script."),
 ):
     """
@@ -78,57 +91,90 @@ def install_deps(
     """
     project_dir = helpers.get_project_dir(dir)
     log.info(f"Setting up project in: {project_dir}")
-    venv_path = _ensure_venv(project_dir, create_if_missing=True) # Ensure venv exists
+    venv_path = _ensure_venv(project_dir, create_if_missing=True)
     if not venv_path: return
+
+    # Verify VENV_DIR_NAME is in EXCLUDE_DIRS (from config.py)
+    # This is just a sanity check during development; EXCLUDE_DIRS should be correct
+    if VENV_DIR_NAME not in EXCLUDE_DIRS:
+        log.warning(f"Configuration issue: '{VENV_DIR_NAME}' not found in EXCLUDE_DIRS set in config.py. Pipreqs might scan the virtual environment.")
+        # Consider adding it dynamically if needed, though fixing config.py is better:
+        # EXCLUDE_DIRS.add(VENV_DIR_NAME)
 
     req_file = project_dir / REQ_FILE_NAME
 
-    # 1. Generate requirements.txt if needed or forced
+    # --- Section 1: Generate requirements.txt if needed or forced ---
     if force_req_gen or not req_file.exists():
-        log.info(f"Generating {REQ_FILE_NAME} using pipreqs...")
-        helpers.ensure_tool_installed("pipreqs", "pipreqs", venv_path, project_dir, check_command=["pipreqs"])
-        pipreqs_cmd = helpers.get_executable(venv_path, "pipreqs")
-        # Build command parts carefully
-        cmd = [pipreqs_cmd, str(project_dir), "--force", "--savepath", str(req_file)]
-        # Add ignore paths - check pipreqs documentation for exact format if needed
-        for ignore_dir in EXCLUDE_DIRS:
-             cmd.extend(["--ignore", ignore_dir])
+        log.info(f"Ensuring 'pipreqs' is installed in the virtual environment '{venv_path.name}'...")
+        try:
+            helpers.ensure_tool_installed("pipreqs", "pipreqs", venv_path, project_dir)
+        except typer.Exit:
+             log.error("Cannot proceed with generating requirements without 'pipreqs'.")
+             raise
 
-        # Handle if pipreqs_cmd is 'python -m pipreqs'
-        if " -m " in pipreqs_cmd:
-             python_exe, *module_args = pipreqs_cmd.split(" ", 2) # basic split
-             cmd = [python_exe.strip('"')] + module_args + cmd[1:] # Reconstruct
+        log.info(f"Generating {REQ_FILE_NAME} using 'pipreqs'...")
+        python_exe = helpers.get_venv_python(venv_path)
+        if not python_exe:
+             log.error(f"Critical error: Could not find python executable in the verified venv: {venv_path}")
+             raise typer.Exit(1)
 
-        rc, out, err = helpers.run_cmd(cmd, cwd=project_dir, capture=True, check=False)
+        pipreqs_base_cmd = [
+            "pipreqs",
+            ".",
+            "--ignore",
+            ','.join(EXCLUDE_DIRS)
+        ]
+
+        # --- Add Debug Logging for the Full Command ---
+        # Use shlex.join for better quoting representation if needed, but simple join is ok for debug
+        log.info(f"Running pipreqs command: {' '.join(pipreqs_base_cmd)}")
+        # ---------------------------------------------
+
+        rc, out, err = helpers.run_cmd(pipreqs_base_cmd, cwd=project_dir, capture=True, check=False)
+
         if rc != 0:
-            log.error("pipreqs failed.")
-            if err: typer.echo(helpers.style(f"Error Output:\n{err}", fg=helpers.colors.RED), err=True)
-            # Don't exit? Maybe user wants to install existing file? Let install proceed.
+            log.error(f"'python -m pipreqs' failed (exit code {rc}).")
+            if err:
+                typer.echo(helpers.style(f"pipreqs Error Output:\n{err}", fg=helpers.colors.RED), err=True)
+            if force_req_gen or not req_file.exists():
+                 log.error(f"Failed to generate required {REQ_FILE_NAME}. Halting installation.")
+                 raise typer.Exit(1)
+            else:
+                 log.error(f"pipreqs failed. Cannot guarantee dependencies are up-to-date. Halting installation.")
+                 raise typer.Exit(1)
         else:
              try:
                  count = len(req_file.read_text().splitlines())
-                 log.info(f"{REQ_FILE_NAME} generated with {count} packages.")
-             except Exception:
-                 log.warning(f"Could not count packages in {req_file}")
+                 log.info(f"{REQ_FILE_NAME} generated/updated successfully with {count} packages.")
+             except FileNotFoundError:
+                 log.error(f"{REQ_FILE_NAME} not found after pipreqs reported success. Check pipreqs output.")
+                 raise typer.Exit(1)
+             except Exception as e:
+                 log.warning(f"Could not count packages in generated {req_file}: {e}")
 
 
-    # 2. Install dependencies from requirements.txt
+    # --- Section 2: Install dependencies from requirements.txt ---
     if req_file.exists():
         log.info(f"Installing dependencies from {req_file}...")
         try:
+            # Use run_pip_cmd to ensure installation into the venv
             helpers.run_pip_cmd(["install", "--upgrade", "-r", str(req_file)], venv_path, project_dir, check=True)
             log.info("Dependencies installed successfully.")
         except typer.Exit:
             log.error(f"Failed to install dependencies from {req_file}.")
-            # Optionally trigger 'pippy ask' here if desired
-            raise # Re-raise the Exit exception
+            # Optionally trigger 'pippy ask' here or provide more specific guidance
+            raise # Re-raise the Exit exception from run_pip_cmd
     else:
-        log.warning(f"{req_file} not found. No dependencies installed.")
+        # This case should only be reached if generation wasn't forced and the file didn't exist initially
+        log.warning(f"{req_file} not found and generation was not requested/forced.")
+        log.info("No dependencies installed.")
         log.info("You can generate it using 'pippy install --force-req' or create it manually.")
 
-    # 3. Configure main script (if not skipped)
+
+    # --- Section 3: Configure main script (if not skipped) ---
     if not skip_main_config:
         try:
+            # Assuming configure_main exists and works correctly
             configure_main(project_dir)
         except Exception as e:
             log.warning(f"Could not configure main script: {e}")

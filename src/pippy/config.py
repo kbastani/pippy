@@ -4,7 +4,7 @@ import logging
 
 # --- Constants ---
 APP_NAME = "pippy"
-VERSION = "1.0.0" # Keep in sync with pyproject.toml
+VERSION = "1.0.2" # Keep in sync with pyproject.toml
 CONFIG_FILE_NAME = "pippy.json"
 LOCK_FILE_NAME = "requirements.lock"
 REQ_FILE_NAME = "requirements.txt"

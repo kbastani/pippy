@@ -91,17 +91,9 @@ def run_cmd(
     if env:
         effective_env.update(env)
 
-    log.debug(f"Running command: {cmd_list} in {cwd or Path.cwd()}")
+    log.info(f"Running command: {cmd_list} in {cwd or Path.cwd()}")
 
     try:
-        # If shell=True, cmd_list must be a string
-        if shell and not isinstance(cmd_list, str):
-             log.error("Cannot use shell=True with a list of arguments.")
-             raise Exit(1)
-        # If shell=False, quote arguments with spaces if necessary
-        if not shell and isinstance(cmd_list, list):
-            cmd_list = [shlex.quote(str(arg)) for arg in cmd_list]
-
         process = subprocess.run(
             cmd_list,
             cwd=cwd,
@@ -167,6 +159,65 @@ def run_pip_cmd(
     """Runs a pip command using the venv's python -m pip."""
     return run_python_cmd(["-m", "pip"] + args, venv_path, cwd, capture, check, env)
 
+
+def ensure_python_module_installed(
+    module_name: str,
+    pip_package: str,
+    venv_path: Optional[Path],
+    project_dir: Path,
+):
+    """
+    Checks if a Python module can be imported in the venv and installs
+    it using 'python -m pip install' if not.
+    """
+    # Determine the correct python executable (venv preferred)
+    python_exe = sys.executable # Default to current python
+    if venv_path:
+        venv_python = get_venv_python(venv_path)
+        if venv_python:
+            python_exe = str(venv_python)
+        else:
+            log.warning(f"Could not find python executable in venv: {venv_path}. Using {sys.executable} for check/install.")
+            # Depending on severity, you might want to raise Exit(1) here
+
+    log.debug(f"Checking if module '{module_name}' is importable using {python_exe}")
+    # Command to check if the module can be found by the interpreter
+    check_cmd = [
+        python_exe,
+        "-c",
+        f"import importlib.util; import sys; sys.exit(0 if importlib.util.find_spec('{module_name}') else 1)"
+    ]
+
+    try:
+        # Run the check command silently
+        rc, _, _ = run_cmd(check_cmd, cwd=project_dir, check=False, capture=True)
+        if rc == 0:
+            log.debug(f"Module '{module_name}' is available.")
+            return # Module exists and is importable, nothing more to do
+    except Exception as e:
+        log.warning(f"Failed during check for module '{module_name}': {e}")
+        # Proceed to install just in case the check itself failed
+
+    # If check failed (rc != 0) or the check command itself errored, attempt install
+    log.info(f"Module '{module_name}' not found or check failed, installing '{pip_package}' using 'pip install'...")
+    try:
+        # Use run_pip_cmd which ensures using the correct python -m pip
+        run_pip_cmd(["install", pip_package], venv_path, project_dir, check=True)
+        log.info(f"Successfully installed '{pip_package}'.")
+
+        # Optional: Verify again after install
+        try:
+            rc_verify, _, _ = run_cmd(check_cmd, cwd=project_dir, check=False, capture=True)
+            if rc_verify != 0:
+                    log.warning(f"Module '{module_name}' still not importable after installation attempt.")
+            else:
+                    log.debug(f"Module '{module_name}' confirmed importable after installation.")
+        except Exception:
+                log.warning("Could not re-verify module installation.")
+
+    except Exit as e: # Catch Exit exceptions from run_pip_cmd
+        log.error(f"Failed to install '{pip_package}'. Please install it manually in the project venv ('{python_exe} -m pip install {pip_package}').")
+        raise e # Re-raise the exception to halt the process
 
 # --- Tool Installation/Check Helpers ---
 
