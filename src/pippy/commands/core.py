@@ -69,7 +69,7 @@ def init_project(
 @app.command("install")
 def install_deps(
     dir: Optional[Path] = typer.Argument(None, help="Project directory (default: current directory).", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
-    force_req_gen: bool = typer.Option(True, "--force-req", "-f", help="Force regeneration of requirements.txt using pipreqs."),
+    force_req_gen: bool = typer.Option(False, "--force-req", "-f", help="Force regeneration of requirements.txt using pipreqs."),
     skip_main_config: bool = typer.Option(False, "--skip-main", help="Skip configuring the main script."),
 ):
     """
